@@ -1,4 +1,5 @@
 """All LLM calls live here (OpenAI chat-completions over plain HTTPS)."""
+import asyncio
 import json
 import logging
 import os
@@ -39,6 +40,14 @@ def configured() -> bool:
     return bool(k) and not k.startswith("replace_with")
 
 
+RETRY_STATUS = {429, 500, 502, 503, 504}
+
+
+def fallback_models() -> list[str]:
+    raw = os.getenv("OPENAI_FALLBACK_MODELS", "")
+    return [m.strip().strip("\"'") for m in raw.split(",") if m.strip()]
+
+
 async def call_llm(system: str, user: str, *, json_mode: bool = False, temperature: float = 0.3) -> str:
     if not configured():
         raise AIError("AI is not configured. Set OPENAI_API_KEY on the server.", 503)
@@ -46,29 +55,41 @@ async def call_llm(system: str, user: str, *, json_mode: bool = False, temperatu
     # JSON_MODE=off skips it; otherwise we retry once without it if the provider answers 400.
     use_json = json_mode and os.getenv("JSON_MODE", "on").lower() != "off"
     url = chat_url()
-    for attempt in range(2):
-        payload = {
-            "model": model(),
-            "temperature": temperature,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-        }
-        if use_json:
-            payload["response_format"] = {"type": "json_object"}
-        try:
-            async with httpx.AsyncClient(timeout=60) as client:
-                r = await client.post(url, headers={"Authorization": f"Bearer {api_key()}"}, json=payload)
-        except (httpx.HTTPError, httpx.InvalidURL) as e:
-            log.error("AI call failed (%s): %r  url=%s model=%s", type(e).__name__, e, url, model())
-            raise AIError(
-                f"Could not reach the AI provider ({type(e).__name__}). "
-                "Check OPENAI_BASE_URL and OPENAI_MODEL on the server.", 502)
-        if r.status_code == 400 and use_json and attempt == 0:
-            use_json = False
-            continue
-        break
+    models = [model()] + [m for m in fallback_models() if m != model()]
+    r = None
+    for mi, m in enumerate(models):
+        json_on = use_json
+        for attempt in range(3):
+            payload = {
+                "model": m,
+                "temperature": temperature,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+            }
+            if json_on:
+                payload["response_format"] = {"type": "json_object"}
+            try:
+                async with httpx.AsyncClient(timeout=45) as client:
+                    r = await client.post(url, headers={"Authorization": f"Bearer {api_key()}"}, json=payload)
+            except (httpx.HTTPError, httpx.InvalidURL) as e:
+                log.error("AI call failed (%s): %r  url=%s model=%s", type(e).__name__, e, url, m)
+                raise AIError(
+                    f"Could not reach the AI provider ({type(e).__name__}). "
+                    "Check OPENAI_BASE_URL and OPENAI_MODEL on the server.", 502)
+            if r.status_code == 400 and json_on:
+                json_on = False  # provider rejects JSON mode: retry plain
+                continue
+            if r.status_code in RETRY_STATUS and attempt < 2:
+                log.warning("AI provider %s on model %s, retrying", r.status_code, m)
+                await asyncio.sleep(1.5 * (attempt + 1))
+                continue
+            break
+        # success or a hard error (bad key etc.) -> stop; busy/quota/unknown-model -> try next model
+        if r.status_code == 200 or (r.status_code not in RETRY_STATUS and r.status_code != 404) or mi == len(models) - 1:
+            break
+        log.warning("Model %s gave %s, switching to fallback model", m, r.status_code)
     data = {}
     try:
         data = r.json()
@@ -79,9 +100,15 @@ async def call_llm(system: str, user: str, *, json_mode: bool = False, temperatu
     if r.status_code != 200:
         err = data.get("error") if isinstance(data, dict) else None
         msg = (err.get("message") if isinstance(err, dict) else err) or "AI provider request failed"
+        log.error("AI provider error %s: %s", r.status_code, str(msg)[:300])
         if r.status_code in (401, 403):
-            msg = "The AI provider rejected the API key. Check OPENAI_API_KEY."
-        raise AIError(str(msg)[:300], 429 if r.status_code == 429 else 502)
+            raise AIError("The AI provider rejected the API key. Check OPENAI_API_KEY.", 502)
+        if r.status_code == 404:
+            raise AIError("The AI model name was not found. Check OPENAI_MODEL.", 502)
+        if r.status_code in (429, 503):
+            raise AIError("The AI service is busy or today's free quota is used up. "
+                          "Wait a minute and try again.", 429 if r.status_code == 429 else 503)
+        raise AIError(str(msg)[:300], 502)
     text = ((data.get("choices") or [{}])[0].get("message") or {}).get("content")
     if not isinstance(text, str) or not text.strip():
         raise AIError("AI provider returned an empty answer")
