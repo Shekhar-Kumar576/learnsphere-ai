@@ -28,37 +28,63 @@ def configured() -> bool:
 async def call_llm(system: str, user: str, *, json_mode: bool = False, temperature: float = 0.3) -> str:
     if not configured():
         raise AIError("AI is not configured. Set OPENAI_API_KEY on the server.", 503)
-    payload = {
-        "model": model(),
-        "temperature": temperature,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-    }
-    if json_mode:
-        payload["response_format"] = {"type": "json_object"}
-    try:
-        async with httpx.AsyncClient(timeout=60) as client:
-            r = await client.post(
-                os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/") + "/chat/completions",
-                headers={"Authorization": f"Bearer {api_key()}"},
-                json=payload,
-            )
-    except httpx.HTTPError:
-        raise AIError("Could not reach the AI provider. Try again.", 502)
+    # Some OpenAI-compatible providers (e.g. Gemini's compat layer) may not accept response_format.
+    # JSON_MODE=off skips it; otherwise we retry once without it if the provider answers 400.
+    use_json = json_mode and os.getenv("JSON_MODE", "on").lower() != "off"
+    url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/") + "/chat/completions"
+    for attempt in range(2):
+        payload = {
+            "model": model(),
+            "temperature": temperature,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        }
+        if use_json:
+            payload["response_format"] = {"type": "json_object"}
+        try:
+            async with httpx.AsyncClient(timeout=60) as client:
+                r = await client.post(url, headers={"Authorization": f"Bearer {api_key()}"}, json=payload)
+        except httpx.HTTPError:
+            raise AIError("Could not reach the AI provider. Try again.", 502)
+        if r.status_code == 400 and use_json and attempt == 0:
+            use_json = False
+            continue
+        break
     data = {}
     try:
         data = r.json()
     except Exception:
         pass
+    if isinstance(data, list) and data:  # some providers wrap errors in a list
+        data = data[0]
     if r.status_code != 200:
-        msg = (data.get("error") or {}).get("message") or "AI provider request failed"
-        raise AIError(msg, 429 if r.status_code == 429 else 502)
+        err = data.get("error") if isinstance(data, dict) else None
+        msg = (err.get("message") if isinstance(err, dict) else err) or "AI provider request failed"
+        if r.status_code in (401, 403):
+            msg = "The AI provider rejected the API key. Check OPENAI_API_KEY."
+        raise AIError(str(msg)[:300], 429 if r.status_code == 429 else 502)
     text = ((data.get("choices") or [{}])[0].get("message") or {}).get("content")
     if not isinstance(text, str) or not text.strip():
         raise AIError("AI provider returned an empty answer")
     return text.strip()
+
+
+def parse_json_text(text: str):
+    """Parse JSON even if the model wrapped it in ```json fences or added a sentence around it."""
+    t = text.strip()
+    if t.startswith("```"):
+        t = t.strip("`")
+        if t[:4].lower() == "json":
+            t = t[4:]
+    try:
+        return json.loads(t)
+    except json.JSONDecodeError:
+        a, b = t.find("{"), t.rfind("}")
+        if a != -1 and b > a:
+            return json.loads(t[a : b + 1])
+        raise
 
 
 async def call_json(system: str, user: str) -> dict:
@@ -66,7 +92,7 @@ async def call_json(system: str, user: str) -> dict:
     for _ in range(2):
         text = await call_llm(system, user, json_mode=True)
         try:
-            obj = json.loads(text)
+            obj = parse_json_text(text)
             if isinstance(obj, dict):
                 return obj
         except json.JSONDecodeError:

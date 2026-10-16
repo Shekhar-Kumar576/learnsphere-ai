@@ -113,3 +113,9 @@ def test_spa_and_unknown_api(client):
     assert client.get("/").status_code == 200
     assert client.get("/api/nope").status_code == 404
     assert client.get("/some/client/route").status_code == 200
+
+
+def test_parse_json_text_handles_fences_and_chatter():
+    from app.ai import parse_json_text
+    assert parse_json_text('```json\n{"a": 1}\n```') == {"a": 1}
+    assert parse_json_text('Here you go: {"a": 2} hope it helps') == {"a": 2}
