@@ -1,8 +1,11 @@
 """All LLM calls live here (OpenAI chat-completions over plain HTTPS)."""
 import json
+import logging
 import os
 
 import httpx
+
+log = logging.getLogger("uvicorn.error")
 
 
 class AIError(Exception):
@@ -13,11 +16,22 @@ class AIError(Exception):
 
 
 def api_key() -> str:
-    return os.getenv("OPENAI_API_KEY", "").strip()
+    return os.getenv("OPENAI_API_KEY", "").strip().strip("\"'")
 
 
 def model() -> str:
-    return os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    return (os.getenv("OPENAI_MODEL") or "gpt-4o-mini").strip().strip("\"'")
+
+
+def chat_url() -> str:
+    """Build the chat-completions URL from OPENAI_BASE_URL, tolerating common typing mistakes."""
+    u = (os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1").strip().strip("\"'").strip()
+    if not u.lower().startswith(("http://", "https://")):
+        u = "https://" + u
+    u = u.rstrip("/")
+    if u.endswith("/chat/completions"):
+        u = u[: -len("/chat/completions")]
+    return u + "/chat/completions"
 
 
 def configured() -> bool:
@@ -31,7 +45,7 @@ async def call_llm(system: str, user: str, *, json_mode: bool = False, temperatu
     # Some OpenAI-compatible providers (e.g. Gemini's compat layer) may not accept response_format.
     # JSON_MODE=off skips it; otherwise we retry once without it if the provider answers 400.
     use_json = json_mode and os.getenv("JSON_MODE", "on").lower() != "off"
-    url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/") + "/chat/completions"
+    url = chat_url()
     for attempt in range(2):
         payload = {
             "model": model(),
@@ -46,8 +60,11 @@ async def call_llm(system: str, user: str, *, json_mode: bool = False, temperatu
         try:
             async with httpx.AsyncClient(timeout=60) as client:
                 r = await client.post(url, headers={"Authorization": f"Bearer {api_key()}"}, json=payload)
-        except httpx.HTTPError:
-            raise AIError("Could not reach the AI provider. Try again.", 502)
+        except (httpx.HTTPError, httpx.InvalidURL) as e:
+            log.error("AI call failed (%s): %r  url=%s model=%s", type(e).__name__, e, url, model())
+            raise AIError(
+                f"Could not reach the AI provider ({type(e).__name__}). "
+                "Check OPENAI_BASE_URL and OPENAI_MODEL on the server.", 502)
         if r.status_code == 400 and use_json and attempt == 0:
             use_json = False
             continue
