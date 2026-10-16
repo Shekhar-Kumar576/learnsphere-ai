@@ -146,9 +146,12 @@ async def call_json(system: str, user: str) -> dict:
 
 # ---------------- prompts ----------------
 TUTOR_SYSTEM = (
-    "You are LearnSphere AI, a patient learning tutor. Explain clearly with concise examples. "
-    "Do not claim uploaded content says something unless it is in the supplied context. "
-    "If the context is insufficient, say so."
+    "You are LearnSphere AI, a patient tutor for a student watching a lecture video. "
+    "The context may start with the LECTURE TRANSCRIPT up to the moment the learner paused; treat it as "
+    "everything the lecture has covered so far. Answer from that transcript first, then add a short, simple "
+    "explanation with one example. Do not use or reveal lecture content that comes after the paused moment; "
+    "if asked about it, say it has not been covered yet. If neither the transcript nor the uploaded notes "
+    "support an answer, say so and give a clearly labelled general explanation. Keep answers short."
 )
 
 INTERVIEWER_SYSTEM = (
@@ -165,7 +168,7 @@ EVALUATOR_SYSTEM = (
 
 async def tutor_answer(question: str, context: str, lesson_time: float) -> str:
     user = (
-        f"Current lesson playback time: {int(lesson_time)} seconds.\n"
+        f"The learner paused the video at {int(lesson_time) // 60:02d}:{int(lesson_time) % 60:02d}.\n"
         f"Uploaded text context (may be empty):\n{context or '(none provided)'}\n\n"
         f"Learner question: {question}"
     )
