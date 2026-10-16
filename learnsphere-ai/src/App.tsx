@@ -29,8 +29,8 @@ type UploadItem = {
 
 const photo =
   "https://images.unsplash.com/photo-1758270705290-62b6294dd044?crop=entropy&cs=tinysrgb&fit=crop&fm=jpg&q=82&w=1200"
-const videoUrl =
-  "https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
+const videoUrl = "/ml-lesson.mp4"
+const videoUrlWebm = "/ml-lesson.webm"
 
 const nav: { id: Route; label: string; icon: string }[] = [
   { id: "home", label: "Home", icon: "home" },
@@ -51,38 +51,38 @@ const transcript = [
     text: "Welcome to machine learning foundations. We begin by asking how computers learn patterns from examples.",
   },
   {
-    time: 4,
-    stamp: "00:04",
+    time: 16,
+    stamp: "00:16",
     title: "Instructor",
     text: "Supervised learning uses labelled examples: each input is paired with the answer we want the model to learn.",
   },
   {
-    time: 8,
-    stamp: "00:08",
+    time: 32,
+    stamp: "00:32",
     title: "Instructor",
     text: "Think of teaching a student with flashcards. The question is the input and the answer on the back is the label.",
   },
   {
-    time: 12,
-    stamp: "00:12",
+    time: 48,
+    stamp: "00:48",
     title: "Instructor",
     text: "Classification predicts a category, while regression predicts a continuous number.",
   },
   {
-    time: 16,
-    stamp: "00:16",
+    time: 64,
+    stamp: "01:04",
     title: "Instructor",
     text: "Later we will compare this with unsupervised learning, where examples do not come with labels.",
   },
   {
-    time: 20,
-    stamp: "00:20",
+    time: 80,
+    stamp: "01:20",
     title: "Instructor",
     text: "A training set teaches the model; a separate test set helps us evaluate how well it generalizes.",
   },
   {
-    time: 24,
-    stamp: "00:24",
+    time: 96,
+    stamp: "01:36",
     title: "Instructor",
     text: "In the next chapter, we will explore model evaluation and overfitting in more detail.",
   },
@@ -126,7 +126,7 @@ const starterHistory: HistoryItem[] = [
   {
     type: "Lesson",
     title: "ML Foundations",
-    detail: "Sample activity • watched to 00:12",
+    detail: "Sample activity • watched to 00:48",
     time: "Today, 9:42 AM",
   },
   {
@@ -468,7 +468,7 @@ function App() {
               setHistory(starterHistory)
               setUploads([])
               localStorage.removeItem("ls-uploads")
-              localStorage.removeItem("ls-progress")
+              localStorage.removeItem("ls-progress-ml")
             }}
           />
         )}
@@ -844,13 +844,19 @@ function Workspace({
 }) {
   const video = useRef<HTMLVideoElement>(null)
   const [time, setTime] = useState(() =>
-    Number(localStorage.getItem("ls-progress") || 0),
+    Number(localStorage.getItem("ls-progress-ml") || 0),
   )
   const [activeTab, setActiveTab] = useState<"transcript" | "resources">(
     "transcript",
   )
   const [mobileTab, setMobileTab] =
     useState<"lesson" | "outline" | "assistant">("lesson")
+  const [paused, setPaused] = useState(true)
+  const [askTick, setAskTick] = useState(0)
+  const [narrate, setNarrate] = useState(true)
+  const [videoError, setVideoError] = useState(false)
+  const spoken = useRef(-1)
+  const canSpeak = typeof window !== "undefined" && "speechSynthesis" in window
   const seek = (t: number) => {
     if (video.current) {
       video.current.currentTime = t
@@ -863,12 +869,38 @@ function Workspace({
   const update = () => {
     const t = video.current?.currentTime || 0
     setTime(t)
-    localStorage.setItem("ls-progress", String(t))
+    localStorage.setItem("ls-progress-ml", String(t))
   }
   const active = Math.max(
     0,
     transcript.map((x) => x.time).reduce((last, t, i) => t <= time ? i : last, 0),
   )
+  // Browser text-to-speech reads the current transcript line while the video plays.
+  useEffect(() => {
+    if (!canSpeak) return
+    if (!narrate || paused) {
+      window.speechSynthesis.cancel()
+      spoken.current = -1
+      return
+    }
+    if (spoken.current === active) return
+    spoken.current = active
+    window.speechSynthesis.cancel()
+    const u = new SpeechSynthesisUtterance(transcript[active].text)
+    u.lang = "en-US"
+    u.rate = 0.95
+    window.speechSynthesis.speak(u)
+  }, [active, narrate, paused, canSpeak])
+  useEffect(() => () => { if (canSpeak) window.speechSynthesis.cancel() }, [canSpeak])
+  const transcriptContext = transcript
+    .filter((l) => l.time <= time)
+    .map((l) => `[${l.stamp}] ${l.text}`)
+    .join("\n")
+  const askAboutMoment = () => {
+    video.current?.pause()
+    setAskTick((n) => n + 1)
+    setMobileTab("assistant")
+  }
   return (
     <div className="workspace">
       <div className="workspace-top">
@@ -941,7 +973,7 @@ function Workspace({
                   </i>
                   <div>
                     <span>Supervised Learning</span>
-                    <small>06:28 • Playing</small>
+                    <small>01:52 • Playing</small>
                   </div>
                 </button>
                 <button onClick={() => seek(16)}>
@@ -1003,17 +1035,42 @@ function Workspace({
               playsInline
               preload="metadata"
               onTimeUpdate={update}
+              onPlay={() => setPaused(false)}
+              onPause={() => setPaused(true)}
+              onEnded={() => setPaused(true)}
+              onError={() => setVideoError(true)}
               onLoadedMetadata={() => {
                 if (video.current && time > 0) video.current.currentTime = time
               }}
             >
               <source src={videoUrl} type="video/mp4" />
+              <source src={videoUrlWebm} type="video/webm" />
               Your browser does not support HTML5 video.
             </video>
+            {videoError && (
+              <p className="video-error">
+                The video could not be loaded. Check your connection and refresh the page.
+              </p>
+            )}
             <div className="video-badge">
-              <Icon name="spark" size={13} /> Demo lecture visual • transcript
+              <Icon name="spark" size={13} /> Animated lesson • captions • transcript
               below
             </div>
+          </div>
+          <div className="ask-bar">
+            {paused && time > 0 ? (
+              <>
+                <span>⏸ Paused at <b>{formatTime(time)}</b></span>
+                <button onClick={askAboutMoment}>Ask AI about this moment</button>
+              </>
+            ) : (
+              <span>Pause the video at any point, then ask the AI about that moment.</span>
+            )}
+            {canSpeak && (
+              <button className="ghost" onClick={() => setNarrate((n) => !n)}>
+                {narrate ? "🔊 Narration on" : "🔇 Narration off"}
+              </button>
+            )}
           </div>
           <div className="lesson-meta">
             <div>
@@ -1098,6 +1155,8 @@ function Workspace({
           seek={seek}
           go={go}
           addHistory={addHistory}
+          transcriptContext={transcriptContext}
+          askTick={askTick}
           className={mobileTab === "assistant" ? "mobile-active" : ""}
         />
       </div>
@@ -1117,12 +1176,16 @@ function ChatPanel({
   seek,
   go,
   addHistory,
+  transcriptContext,
+  askTick,
   className,
 }: {
   time: number
   seek: (t: number) => void
   go: (r: Route) => void
   addHistory: (h: HistoryItem) => void
+  transcriptContext: string
+  askTick: number
   className?: string
 }) {
   const [messages, setMessages] = useState<Message[]>([
@@ -1136,6 +1199,12 @@ function ChatPanel({
   const [thinking, setThinking] = useState<0 | 1 | 2>(0)
   const [liveAI, setLiveAI] = useState(false)
   const end = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
+  useEffect(() => {
+    if (askTick === 0) return
+    setInput("Explain what was just said at this moment in simple words.")
+    inputRef.current?.focus()
+  }, [askTick])
   useEffect(() => {
     fetch("/api/health").then((r) => r.json()).then((data: { aiConfigured?: boolean }) => setLiveAI(Boolean(data.aiConfigured))).catch(() => setLiveAI(false))
   }, [])
@@ -1153,11 +1222,11 @@ function ChatPanel({
     addHistory({
       type: "AI Question",
       title: q,
-      detail: `Demo conversation • context ${formatTime(time)}`,
+      detail: `Lesson conversation • paused at ${formatTime(time)}`,
       time: "Just now",
     })
     window.setTimeout(() => setThinking(2), 250)
-    const resourceContext = uploadsTextFromStorage()
+    const resourceContext = `LECTURE TRANSCRIPT (Supervised Learning), up to ${formatTime(time)}:\n${transcriptContext}\n\n${uploadsTextFromStorage()}`.slice(0, 20000)
     fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-User-Id": userId() },
@@ -1265,6 +1334,7 @@ function ChatPanel({
         }}
       >
         <textarea
+          ref={inputRef}
           aria-label="Ask the learning assistant"
           placeholder="Ask about this lesson..."
           rows={2}
@@ -1301,11 +1371,11 @@ function answerFor(question: string, time: number): Message {
     (q.includes("unsupervised") ||
       q.includes("overfitting") ||
       q.includes("future")) &&
-    time < 16
+    time < 64
   )
     return {
       ...base,
-      text: "That concept hasn’t been covered at your current position yet. To avoid revealing future lecture content, I can answer after you reach 00:16, or you can open a permitted course resource.",
+      text: "That concept hasn’t been covered at your current position yet. To avoid revealing future lecture content, I can answer after you reach 01:04, or you can open a permitted course resource.",
       followups: ["What has been covered so far?", "Open course notes"],
     }
   if (q.includes("not in") || q.includes("quantum") || q.includes("blockchain"))
@@ -1330,11 +1400,11 @@ function answerFor(question: string, time: number): Message {
         detail: "Task types comparison table in the prepared sample deck.",
       },
     ]
-    if (time >= 12)
+    if (time >= 48)
       sources.unshift({
         type: "video",
-        label: "Video 00:12–00:16",
-        time: 12,
+        label: "Video 00:48–01:04",
+        time: 48,
         detail: "Instructor compares category and continuous predictions.",
       })
     return {
@@ -1352,11 +1422,11 @@ function answerFor(question: string, time: number): Message {
         detail: "Evaluation section in the prepared sample notes.",
       },
     ]
-    if (time >= 20)
+    if (time >= 80)
       sources.unshift({
         type: "video",
-        label: "Video 00:20–00:24",
-        time: 20,
+        label: "Video 01:20–01:36",
+        time: 80,
         detail: "Training and test split explanation.",
       })
     return {
@@ -1367,7 +1437,7 @@ function answerFor(question: string, time: number): Message {
     }
   }
   if (q.includes("summar")) {
-    if (time < 4)
+    if (time < 16)
       return {
         ...base,
         text: "You’re at the very start of the lesson, so there isn’t enough watched lecture content to summarize yet. Play a little more, or I can summarize a permitted course resource instead.",
@@ -1376,7 +1446,7 @@ function answerFor(question: string, time: number): Message {
     return {
       ...base,
       text:
-        time < 12
+        time < 48
           ? "So far, you’ve learned that machine learning finds patterns from examples. In supervised learning, every training input is paired with a known label, like a flashcard with an answer on the back."
           : "So far, you’ve learned that machine learning finds patterns from examples. In supervised learning, every training input has a known label. Classification predicts categories, while regression predicts numbers.",
       sources: [
@@ -1407,11 +1477,11 @@ function answerFor(question: string, time: number): Message {
       detail: "Labelled examples diagram in prepared sample slides.",
     },
   ]
-  if (time >= 4)
+  if (time >= 16)
     sources.unshift({
       type: "video",
-      label: "Video 00:04–00:12",
-      time: 4,
+      label: "Video 00:16–00:48",
+      time: 16,
       detail: "Definition and flashcard analogy from the sample transcript.",
     })
   return {
