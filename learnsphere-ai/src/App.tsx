@@ -300,7 +300,9 @@ function App() {
   useEffect(() => {
     api<Health>("/api/health").then(setHealth).catch(() => setHealth(null))
   }, [])
-  useEffect(refreshStats, [route])
+  useEffect(() => {
+    refreshStats()
+  }, [route])
 
   useEffect(() => {
     document.documentElement.dataset.theme = dark ? "dark" : "light"
@@ -308,10 +310,9 @@ function App() {
     localStorage.setItem("ls-theme", dark ? "dark" : "light")
     localStorage.setItem("ls-motion", reducedMotion ? "reduced" : "full")
   }, [dark, reducedMotion])
-  useEffect(
-    () => localStorage.setItem("ls-history", JSON.stringify(history)),
-    [history],
-  )
+  useEffect(() => {
+    localStorage.setItem("ls-history", JSON.stringify(history))
+  }, [history])
   useEffect(() => {
     try { localStorage.setItem("ls-uploads", JSON.stringify(uploads)) } catch { /* storage quota: keep session state */ }
   }, [uploads])
@@ -1208,10 +1209,9 @@ function ChatPanel({
   useEffect(() => {
     fetch("/api/health").then((r) => r.json()).then((data: { aiConfigured?: boolean }) => setLiveAI(Boolean(data.aiConfigured))).catch(() => setLiveAI(false))
   }, [])
-  useEffect(
-    () => end.current?.scrollIntoView({ behavior: "smooth" }),
-    [messages, thinking],
-  )
+  useEffect(() => {
+    end.current?.scrollIntoView({ behavior: "smooth" })
+  }, [messages, thinking])
 
   const send = (question = input) => {
     if (!question.trim() || thinking) return
