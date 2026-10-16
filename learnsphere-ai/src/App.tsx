@@ -1237,7 +1237,11 @@ function ChatPanel({
         return response.json() as Promise<{ answer: string; mode?: string }>
       })
       .then((data) => setMessages((m) => [...m, {
-        id: Date.now() + 1, role: "assistant", text: data.answer,
+        id: Date.now() + 1,
+        role: "assistant",
+        text: typeof data.answer === "string" && data.answer.trim()
+          ? data.answer
+          : "The AI returned an empty answer. Please try asking again.",
       }]))
       .catch(() => setMessages((m) => [...m, {
         ...answerFor(q, time),
@@ -1514,7 +1518,7 @@ function ChatMessage({
         </div>
       )}
       <div className="bubble">
-        {message.text.split("\n").map((p, i) => (
+        {String(message.text ?? "").split("\n").map((p, i) => (
           <p key={i}>{renderBold(p)}</p>
         ))}
         {message.sources && (
